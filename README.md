@@ -1,177 +1,203 @@
-# Food Delivery Streaming Pipeline (CDC → Kafka → Flink → OpenSearch/Redis/Delta)
+# Food Delivery Data Pipeline (CDC → Kafka → Flink → Online Views/Features)
 
 ![Architecture](docs/architecture.jpg)
 
-This repository showcases an end‑to‑end streaming data pipeline for a food‑delivery platform:
-**PostgreSQL (OLTP) → Debezium CDC → Kafka → Flink SQL → OpenSearch & Redis**, with an optional
-Delta Lake sink for offline analytics.
-
-The goal is to keep **near‑real‑time materialized views** (e.g., `orders_summary` per status) in
-OpenSearch for fast search/filters, and **online features** in Redis; while the original OLTP
-database continues to serve writes.
+> Production‑grade, containerized data pipeline for a food‑delivery platform.  
+> PostgreSQL change data capture (CDC) → Kafka → Flink SQL materialized views →
+> OpenSearch (search/analytics) + Redis (online features) with optional Delta Lake for offline analytics.
 
 ---
+
+## Table of Contents
+- [Goals](#goals)
+- [Stack](#stack)
+- [Repository Layout](#repository-layout)
+- [Quick Start](#quick-start)
+- [Operations](#operations)
+- [Configuration](#configuration)
+- [Verification](#verification)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [Versioning & Releases](#versioning--releases)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Goals
+- Illustrate a **near real‑time** data flow from OLTP (PostgreSQL) into **streaming views** consumed by services.
+- Keep everything **local-first** via Docker Compose while matching production topology.
+- Provide **scripts** to register connectors, fetch Flink JARs and submit SQL jobs reproducibly.
+- Offer **observability hooks** and **repeatable verification** commands.
 
 ## Stack
+The exact versions come from the Docker images in `docker/docker-compose.yml`.  
+Fill/update the table below to reflect your image tags (see [`VERSIONS.md`](VERSIONS.md)).
 
-- **PostgreSQL** – Source OLTP (`fooddb`) with tables like `orders`, `catalog`, `delivery`.
-- **Kafka** – Event backbone.
-- **Debezium PostgreSQL** (Kafka Connect) – Change Data Capture from Postgres to Kafka.
-- **Flink SQL** – Consumes Kafka topics, computes views/features, sinks to OpenSearch (and optionally Redis/Delta).
-- **OpenSearch** – Search/analytics store for materialized views.
-- **Redis** (optional) – Online feature store (ETA/dispatch features).
-- **Delta Lake + S3** (optional) – Offline analytics sink (batch or micro‑batch).
+| Component          | Role                               | Notes / Version (example) |
+|-------------------|------------------------------------|---------------------------|
+| PostgreSQL        | OLTP, CDC source                    | 17.x (logical decoding)   |
+| Debezium          | CDC (Postgres connector)            | 3.2.x                     |
+| Kafka + Connect   | Event backbone + Connect runtime    | Kafka 4.x                 |
+| Flink             | Stream processing (SQL)             | 1.18.x                    |
+| OpenSearch        | Search/analytics sink               | 2.x                       |
+| Redis             | Online feature store                | 7.x                       |
+| Optional: Spark   | Offline Delta Lake batch            | 3.x                       |
 
----
+> **Tip:** Only commit `.env.example`. Put sensitive values in your local `.env` (ignored).
 
-## Folder Layout
-
+## Repository Layout
 ```
-.
-├─ docker/                 # docker-compose.yml + service configs
-├─ flink/
-│  ├─ conf/                # Flink config
-│  └─ sql/                 # Flink SQL jobs (e.g., 01_orders_summary.sql)
-├─ scripts/                # Helper scripts
-│  ├─ get_flink_jars.sh
-│  ├─ register_connectors.sh
-│  └─ sql_submit.sh
-├─ consumers/              # (optional) example consumers (Redis, etc.)
-├─ services/api/           # (optional) demo API
-└─ docs/
-   └─ architecture.jpg     # Architecture diagram
+docker/                # Compose, service configs, Flink SQL (if bundled)
+scripts/               # Helper scripts to automate the flow
+services/api/          # Example HTTP API (optional)
+consumers/redis_consumer/  # Example Redis consumer
+flink/                 # Flink config & SQL (alt structure)
+data-gen/              # Synthetic data generators
+docs/                  # Diagrams & docs (architecture.jpg)
+.github/workflows/     # CI (lint builds)
 ```
-
----
-
-## Prerequisites
-
-- **Docker** and **Docker Compose**
-- **curl** (and optionally **jq**) on your host for quick checks
-- **Git**
-
-> **Windows users:** run commands in **WSL2** or Git Bash. If you see CRLF/LF warnings, it’s harmless; you can set `git config core.autocrlf true` if needed.
-
----
 
 ## Quick Start
 
-### 1) Clone & prepare
-```bash
-git clone https://github.com/<your-username>/food-delivery-pipeline-latest.git
-cd food-delivery-pipeline-latest
-```
+### 0) Prerequisites
+- Docker Engine 24+ and **Docker Compose v2**
+- Git, curl
+- Linux/macOS or Windows (WSL2 recommended)
 
-If you have an `.env` file under `docker/`, verify the passwords (e.g. `POSTGRES_PASSWORD`, `OS_PASS`).
+### 1) Configure environment
+Copy the example and edit values:
+```bash
+cp docker/.env.example docker/.env
+# Edit docker/.env and set passwords, ports if needed
+```
 
 ### 2) Start the stack
 ```bash
-cd docker
-docker compose up -d
+docker compose -f docker/docker-compose.yml up -d
 ```
 
-Wait a few seconds for all services to become ready.
+Wait until all services are **healthy**:
+```bash
+docker compose -f docker/docker-compose.yml ps
+```
 
-### 3) (One-time) Download required Flink connector JARs
-From the repo root:
+### 3) Download Flink connector JARs (one-time or when versions change)
 ```bash
 bash scripts/get_flink_jars.sh
 ```
 
-> The script places Kafka/OpenSearch/Redis connectors where the Flink SQL client can load them.
-
-### 4) Register Kafka Connect connectors (Debezium + OpenSearch)
-From the repo root:
+### 4) Register Kafka Connectors (CDC source + OpenSearch sink)
 ```bash
 bash scripts/register_connectors.sh
 ```
 
-This script registers:
-- **`pg-cdc`** – Debezium PostgreSQL CDC connector (source)
-- **`os-views`** – OpenSearch sink connector for topic `views.orders_summary` (target index `views.orders_summary`)
-
-> If you prefer HTTPS to OpenSearch with auth, adjust the script or use the provided `os-sink.json` template.
-
 ### 5) Submit Flink SQL job(s)
-From the repo root:
 ```bash
 bash scripts/sql_submit.sh
 ```
-This submits the streaming job that aggregates order metrics per status (e.g., `delivered`, `cancelled`, `created`) and writes to the Kafka topic `views.orders_summary` which is then consumed by the OpenSearch sink.
 
----
-
-## Verify the Pipeline
-
-### Kafka Connect status
+### 6) (Optional) Generate sample data
 ```bash
-curl -s http://localhost:8083/connectors | jq .
-curl -s http://localhost:8083/connectors/os-views/status | jq -r '.connector.state,.tasks[0].state'
+# Catalog & orders generators (adjust args as needed)
+python3 data-gen/generate_catalog.py
+python3 data-gen/generate_orders.py
 ```
 
-### OpenSearch is up
-```bash
-curl -ksu admin:"$OS_PASS" https://localhost:9200 -I | head -n1
-curl -ksu admin:"$OS_PASS" 'https://localhost:9200/_cat/indices?v'
-```
+## Operations
 
-You should see an index named `views.orders_summary`. To query:
-```bash
-curl -ksu admin:"$OS_PASS"   'https://localhost:9200/views.orders_summary/_search?size=10&pretty'
-```
+Common commands:
 
-### Produce sample messages (optional)
 ```bash
-docker compose exec -T connect bash -lc '
-cat <<EOF | kafka-console-producer.sh --bootstrap-server kafka:9092   --topic views.orders_summary   --property parse.key=true --property key.separator=§
-{"status":"delivered"}§{"status":"delivered","total_amount":157.24,"cnt":6}
-{"status":"cancelled"}§{"status":"cancelled","total_amount":24.78,"cnt":3}
-{"status":"created"}§{"status":"created","total_amount":61.68,"cnt":6}
-EOF
-'
-```
+# Stop / Start
+docker compose -f docker/docker-compose.yml down
+docker compose -f docker/docker-compose.yml up -d
 
-### Reset consumer offsets (only when needed)
-> Do this **only** when the sink connector is **paused** and you want it to re-read history.
-```bash
-# Pause connector
+# Logs
+docker compose -f docker/docker-compose.yml logs -f connect
+docker compose -f docker/docker-compose.yml logs -f flink-jobmanager
+docker compose -f docker/docker-compose.yml logs -f kafka
+
+# Reset the OpenSearch index (dangerous)
+curl -ksu admin:$OS_PASS -XDELETE https://localhost:9200/views.orders_summary
+
+# Pause/Resume a connector
 curl -s -X PUT http://localhost:8083/connectors/os-views/pause
-
-# Reset offsets to earliest
-docker compose exec -T connect bash -lc 'kafka-consumer-groups.sh --bootstrap-server kafka:9092  --group connect-os-views --reset-offsets --to-earliest  --topic views.orders_summary --execute'
-
-# Resume connector
 curl -s -X PUT http://localhost:8083/connectors/os-views/resume
 ```
 
----
+## Configuration
 
-## Tuning Notes
+Key places to look:
+- `docker/.env` — runtime credentials and ports (see `docker/.env.example`)
+- `docker/docker-compose.yml` — image tags, volumes and network
+- `scripts/register_connectors.sh` — payloads for Kafka Connect (CDC + sink)
+- `scripts/sql_submit.sh` — Flink SQL files to execute
 
-- **OpenSearch single-node:** set replicas to `0` to avoid `yellow` health on single-node dev:
+### Environment Variables (excerpt)
+| Variable    | Where               | Description                                  |
+|-------------|---------------------|----------------------------------------------|
+| `OS_PASS`   | your shell / .env   | OpenSearch admin password (basic auth)       |
+| `POSTGRES_*`| docker/.env         | Postgres database, user, password            |
+| `CONNECT_URL` | scripts            | Kafka Connect REST URL (default `http://localhost:8083`) |
+
+## Verification
+
+Once the job runs, confirm the sink index exists and has docs:
+
 ```bash
-curl -ksu admin:"$OS_PASS" -H 'Content-Type: application/json'   -X PUT 'https://localhost:9200/views.orders_summary/_settings'   -d '{"index":{"number_of_replicas":"0"}}'
+# Health & indices
+curl -ksu admin:$OS_PASS https://localhost:9200 -I | head -n1
+curl -ksu admin:$OS_PASS 'https://localhost:9200/_cat/indices?v'
+
+# Query the view
+curl -ksu admin:$OS_PASS 'https://localhost:9200/views.orders_summary/_search?size=5&pretty'
 ```
-- **Version conflicts:** if you set `key.ignore=false` and use upserts by document ID, consider
-  `behavior.on.version.conflict=warn`.
 
----
-
-## Tear Down
+Kafka topic & consumer group checks:
 ```bash
-cd docker
-docker compose down -v
+docker compose -f docker/docker-compose.yml exec -T connect   bash -lc "kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic views.orders_summary"
+
+docker compose -f docker/docker-compose.yml exec -T connect   bash -lc "kafka-consumer-groups.sh --bootstrap-server kafka:9092             --group connect-os-views --describe"
 ```
 
----
+## Troubleshooting
 
-## Roadmap
+- **CRLF ↔ LF warnings on Windows**  
+  This repo ships a `.gitattributes` forcing LF for code/scripts. After pulling, run:
+  ```bash
+  git config core.autocrlf false
+  git rm --cached -r . && git reset --hard
+  ```
 
-- Enrich features and write to **Redis** as an online feature store.
-- Add **Delta Lake** sink job writing to S3 for offline analytics.
-- Add Grafana dashboards & alerting for lag and connector health.
+- **“Connector configuration is invalid” / class is abstract**  
+  Ensure SMTs use the canonical names, e.g. `org.apache.kafka.connect.transforms.ExtractField$Key`.
 
----
+- **Resetting consumer offsets says group is Active/Stable**  
+  Pause the connector first, wait ~10s, then reset:
+  ```bash
+  curl -s -X PUT http://localhost:8083/connectors/os-views/pause
+  docker compose -f docker/docker-compose.yml exec -T connect     bash -lc "kafka-consumer-groups.sh --bootstrap-server kafka:9092               --group connect-os-views --reset-offsets --to-earliest               --topic views.orders_summary --execute"
+  curl -s -X PUT http://localhost:8083/connectors/os-views/resume
+  ```
+
+- **OpenSearch cert verification**  
+  For local dev we disable cert verification with `connection.ssl.verify.certificate=false`. Do not use this in prod.
+
+## Development
+
+- Python tooling (optional): `ruff`, `black`, `pytest`
+- Shell: `shellcheck`
+- CI runs basic lint on PRs (see `.github/workflows/ci.yml`).
+
+## Versioning & Releases
+
+- We follow **SemVer** (`MAJOR.MINOR.PATCH`).
+- Release notes live in [`CHANGELOG.md`](CHANGELOG.md).
+- Component versions are documented in [`VERSIONS.md`](VERSIONS.md).
+
+## Contributing
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). PRs welcome!
 
 ## License
-Apache-2.0 license
+MIT — see [`LICENSE`](LICENSE).
