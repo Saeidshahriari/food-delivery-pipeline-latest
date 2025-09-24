@@ -1,0 +1,6 @@
+[tool.ruff]
+line-length = 100
+exclude = ["flink/lib", "connect/plugins", ".venv", "spark/jobs/*.py"]
+
+[tool.ruff.lint]
+select = ["E","F","I"]

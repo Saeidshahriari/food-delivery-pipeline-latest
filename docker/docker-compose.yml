@@ -1,0 +1,182 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-food}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:Ad@m!n_9xQ#2025}
+      POSTGRES_DB: ${POSTGRES_DB:-fooddb}
+      POSTGRES_INITDB_ARGS: "--wal-segsize=64"
+    command: >
+      postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  kafka:
+    image: apache/kafka:4.0.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:29093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports: ["9092:9092"]
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+
+  connect:
+    image: quay.io/debezium/connect:3.2
+    depends_on:
+      kafka: { condition: service_started }
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: connect-cluster
+      CONFIG_STORAGE_TOPIC: _connect-configs
+      OFFSET_STORAGE_TOPIC: _connect-offsets
+      STATUS_STORAGE_TOPIC: _connect-status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: /kafka/connect,/usr/share/java,/opt/connect-plugins
+    ports: ["8083:8083"]
+    volumes:
+      - ../connect/plugins:/opt/connect-plugins
+
+  flink-jobmanager:
+    image: flink:1.20.2-scala_2.12-java17
+    command: jobmanager
+    ports: ["8081:8081"]
+    volumes:
+      - ./flink/conf:/opt/flink/conf
+      - ./flink/sql:/opt/flink/sql
+      - ./flink/usrlib:/opt/flink/usrlib:ro
+    depends_on:
+      kafka: { condition: service_started }
+
+  flink-taskmanager:
+    image: flink:1.20.2-scala_2.12-java17
+    command: taskmanager
+    volumes:
+      - ./flink/conf:/opt/flink/conf
+      - ./flink/sql:/opt/flink/sql
+      - ./flink/usrlib:/opt/flink/usrlib:ro
+    depends_on:
+      - flink-jobmanager
+
+  flink-sql-client:
+    image: flink:1.20.2-scala_2.12-java17
+    entrypoint: ["/bin/bash","-lc","/opt/flink/bin/sql-client.sh -l /opt/flink/lib -l /opt/flink/usrlib"]
+    tty: true
+    volumes:
+      - ./flink/conf:/opt/flink/conf
+      - ./flink/sql:/opt/flink/sql
+      - ./flink/usrlib:/opt/flink/usrlib:ro
+    depends_on:
+      - flink-jobmanager
+
+  redis:
+    image: redis:7.4
+    ports: ["6379:6379"]
+
+  opensearch:
+    image: opensearchproject/opensearch:3.2.0
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=false
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Ad@m!n_9xQ#2025
+    ports: 
+      - "9200:9200"
+
+  dashboards:
+    image: opensearchproject/opensearch-dashboards:3.2.0
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - OPENSEARCH_USERNAME=admin
+      - OPENSEARCH_PASSWORD=Ad@m!n_9xQ#2025
+    ports: ["5601:5601"]
+    depends_on:
+      opensearch: { condition: service_started }
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:Ad@m!n_9xQ#2025}
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000","9001:9001"]
+    volumes:
+      - miniodata:/data
+
+  create-bucket:
+    image: minio/mc:latest
+    depends_on:
+      minio: { condition: service_started }
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-admin} ${MINIO_ROOT_PASSWORD:Ad@m!n_9xQ#2025};
+      mc mb -p local/${MINIO_BUCKET:-datalake} || true;
+      mc anonymous set download local/${MINIO_BUCKET:-datalake};
+      "
+
+  api:
+    build:
+      context: ../services/api
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-food}:${POSTGRES_PASSWORD:Ad@m!n_9xQ#2025}@postgres:5432/${POSTGRES_DB:-fooddb}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports: ["${API_PORT:-8000}:8000"]
+    depends_on:
+      - postgres
+      - kafka
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports: ["8080:8080"]
+    depends_on:
+      - kafka
+
+  redis-consumer:
+    build:
+      context: ../consumers/redis_consumer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
+    depends_on:
+      - kafka
+      - redis
+
+  spark:
+    image: apache/spark:4.0.1-python3
+    command: >
+      /opt/spark/bin/spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1,io.delta:delta-spark_2.13:4.0.0,org.apache.hadoop:hadoop-aws:3.3.6,com.amazonaws:aws-java-sdk-bundle:1.12.770
+      --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension
+      --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000
+      --conf spark.hadoop.fs.s3a.access.key=${MINIO_ROOT_USER:-admin}
+      --conf spark.hadoop.fs.s3a.secret.key=${MINIO_ROOT_PASSWORD:Ad@m!n_9xQ#2025}
+      --conf spark.hadoop.fs.s3a.path.style.access=true
+      --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
+      /opt/jobs/delta_sink.py
+    volumes:
+      - ../spark/jobs:/opt/jobs
+    depends_on:
+      - create-bucket
+      - kafka
+
+volumes:
+  pgdata: {}
+  kafkadata: {}
+  miniodata: {}
