@@ -1,0 +1,37 @@
+{
+  "name": "os-views",
+  "config": {
+    "connector.class": "io.aiven.kafka.connect.opensearch.OpensearchSinkConnector",
+    "tasks.max": "1",
+    "topics": "views.orders_summary",
+
+    "connection.url": "https://opensearch:9200",
+    "connection.ssl": "true",
+    "connection.ssl.verify.certificate": "false",
+    "connection.username": "admin",
+    "connection.password": "Ad@m!n_9xQ#2025",
+
+    "index": "views.orders_summary",
+    "index.write.method": "upsert",
+
+    "key.ignore": "false",
+    "schema.ignore": "true",
+    "max.in.flight.requests": "1",
+    "behavior.on.malformed.documents": "warn",
+    "behavior.on.null.values": "ignore",
+    "linger.ms": "500",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+
+    "transforms": "toKey,extractKey",
+    "transforms.toKey.type": "org.apache.kafka.connect.transforms.ValueToKey",
+    "transforms.toKey.fields": "status",
+    "transforms.extractKey.type": "org.apache.kafka.connect.transforms.ExtractField$Key",
+    "transforms.extractKey.field": "status",
+
+    "consumer.override.auto.offset.reset": "earliest"
+  }
+}

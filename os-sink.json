@@ -1,0 +1,30 @@
+{
+  "connector.class": "io.aiven.kafka.connect.opensearch.OpensearchSinkConnector",
+  "tasks.max": "1",
+  "topics": "views.orders_summary_v2",
+
+  "connection.url": "https://opensearch:9200",
+  "connection.ssl": "true",
+  "connection.ssl.verify.certificate": "false",
+  "connection.username": "admin",
+  "connection.password": "Ad@m!n_9xQ#2025",
+
+  "index": "views.orders_summary_v2",
+  "index.write.method": "upsert",
+  "behavior.on.version.conflict": "warn",
+
+  "key.ignore": "false",
+  "schema.ignore": "true",
+  "max.in.flight.requests": "1",
+  "batch.size.entries": "2000",
+  "linger.ms": "500",
+
+  "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "key.converter.schemas.enable": "false",
+  "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "value.converter.schemas.enable": "false",
+
+  "transforms": "extractKey",
+  "transforms.extractKey.type": "org.apache.kafka.connect.transforms.ExtractField",
+  "transforms.extractKey.field": "status"
+}

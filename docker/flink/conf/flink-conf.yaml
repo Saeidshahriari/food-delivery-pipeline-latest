@@ -1,0 +1,10 @@
+rest.port: 8081
+blob.server.port: 6124
+taskmanager.memory.process.size: 1536m
+classloader.resolve-order: parent-first
+parallelism.default: 1
+jobmanager.rpc.address: 39d5f8e556ca
+taskmanager.numberOfTaskSlots: 2
+jobmanager.memory.process.size: 1024m
+jobmanager.rpc.port: 6123
+query.server.port: 6125

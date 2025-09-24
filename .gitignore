@@ -1,0 +1,22 @@
+# env & secrets
+.env
+docker/.env
+*.pem
+*.key
+**/target/
+**/build/
+**/.idea/
+**/.vscode/
+**/.DS_Store
+.venv/
+__pycache__/
+logs/
+*.log
+flink/lib/
+connect/plugins/
+spark-warehouse/
+*.iml
+.idea/
+.DS_Store
+*.zip
+*.rar
