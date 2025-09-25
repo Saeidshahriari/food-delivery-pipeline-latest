@@ -129,10 +129,10 @@ curl -s -X PUT http://localhost:8083/connectors/os-views/resume
 ## Configuration
 
 Key places to look:
-- `docker/.env` — runtime credentials and ports (see `docker/.env.example`)
-- `docker/docker-compose.yml` — image tags, volumes and network
-- `scripts/register_connectors.sh` — payloads for Kafka Connect (CDC + sink)
-- `scripts/sql_submit.sh` — Flink SQL files to execute
+- `docker/.env` - runtime credentials and ports (see `docker/.env.example`)
+- `docker/docker-compose.yml` - image tags, volumes and network
+- `scripts/register_connectors.sh` - payloads for Kafka Connect (CDC + sink)
+- `scripts/sql_submit.sh` - Flink SQL files to execute
 
 ### Environment Variables (excerpt)
 | Variable    | Where               | Description                                  |
@@ -200,4 +200,4 @@ docker compose -f docker/docker-compose.yml exec -T connect   bash -lc "kafka-co
 See [`CONTRIBUTING.md`](CONTRIBUTING.md). PRs welcome!
 
 ## License
-MIT — see [`LICENSE`](LICENSE).
+MIT - see [`LICENSE`](LICENSE).
